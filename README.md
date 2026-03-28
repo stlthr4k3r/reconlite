@@ -1,32 +1,44 @@
 # ReconLite
 
-(Work in progress) A simple Python recon tool for footprinting targets.  
+A simple Python recon tool for footprinting targets.
 
 ---
 
 ## Features
 
-- Accepts a domain or IP address as input
-- Optional WHOIS lookup (`--whois`)
-- Prints raw WHOIS output for now
+### WHOIS Lookup
+- Extracts **Registrar**, **Creation Date**, and **Name Servers**  
+- Handles multiple name servers  
+- Case-insensitive parsing with fallback labels  
 
----
-
-## Dependencies
-
-- Python 3
-- WHOIS command installed on your system:
-  - **Linux:** `sudo apt install whois`
-  - **macOS:** `brew install whois`
-  - **Windows:** Install a compatible WHOIS tool or use Python alternatives
+### Modular Design
+- `parse_whois()` handles extraction  
+- `print_whois()` prints results neatly  
 
 ---
 
 ## Usage
 
-```bash
-# Basic usage
-python3 reconlite.py example.com
+Run ReconLite with WHOIS lookup:
 
-# Run WHOIS lookup
+```bash
+python3 reconlite.py <target> --whois
+
+Example:
+
 python3 reconlite.py example.com --whois
+
+Expected output:
+
+[+] WHOIS Summary:
+    Registrar: GoDaddy
+    Creation Date: 2020-01-01
+    Name Servers:
+        - ns1.example.com
+        - ns2.example.com
+
+---
+
+## Disclaimer
+
+For approved penetration testing and educational purposes only. Don't fuck around and find out.
