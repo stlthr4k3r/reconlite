@@ -36,8 +36,7 @@ Expected output:
     Name Servers:
         - ns1.example.com
         - ns2.example.com
-
----
+```
 
 ## Disclaimer
 
