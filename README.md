@@ -11,6 +11,7 @@ A simple Python recon tool for footprinting targets.
 - Automatic server discovery through IANA root WHOIS
 - RDAP fallback for TLDs without WHOIS (Google TLDs like .app, .dev, .page)
 - WHOIS referral chasing for accurate results
+- IP WHOIS via ARIN with automatic RIR referral (APNIC, RIPE, LACNIC, AfriNIC)
 - Cross-platform (Linux, macOS, Windows)
 
 ---
@@ -38,17 +39,28 @@ Registrar: MarkMonitor, Inc.
 ...
 ```
 
-Works with any TLD:
+Works with any TLD and IP addresses:
 
 ```
 $ python3 reconlite.py google.app --whois    # RDAP (Google TLD)
 $ python3 reconlite.py google.fr --whois     # WHOIS (.fr)
 $ python3 reconlite.py google.au --whois     # WHOIS (.au)
+$ python3 reconlite.py 8.8.8.8 --whois       # IP via ARIN -> Google
+$ python3 reconlite.py 1.1.1.1 --whois       # IP via ARIN -> APNIC -> Cloudflare
 ```
 
-## Why not subprocess or python-whois?
+## Why not subprocess or existing libraries?
 
-Both the system `whois` command and the `python-whois` library fail on newer gTLDs that don't have a traditional WHOIS server (like .app, .dev, .page):
+| Feature | `whois` CLI | `python-whois` | `whois` (joepie91) | `ipwhois` | **reconlite** |
+|---|---|---|---|---|---|
+| Domain WHOIS | Yes | Yes | Yes | No (IP only) | **Yes** |
+| IP WHOIS | Yes | No | No | Yes | **Yes** |
+| .app / .dev / .page | No | No | No | N/A | **Yes (RDAP)** |
+| RDAP fallback | No | No | No | Yes (IP only) | **Yes** |
+| Cross-platform | No (Linux/Mac) | Yes | Partial | Yes | **Yes** |
+| External dependencies | System binary | python-dateutil | None | dnspython, defusedxml | **None** |
+
+Both the system `whois` command and Python libraries fail on newer gTLDs that don't have a traditional WHOIS server:
 
 ```
 $ whois google.app
@@ -61,7 +73,7 @@ getaddrinfo(whois.nic.app): Name or service not known
 # Error trying to connect to socket: Name or service not known
 ```
 
-ReconLite handles these automatically via RDAP fallback through the IANA bootstrap registry, no hardcoded server lists needed.
+ICANN sunsetted WHOIS in January 2025 and 374 gTLDs have already shut off port 43. RDAP is the replacement. ReconLite handles both protocols automatically via the IANA bootstrap registry, no hardcoded server lists needed.
 
 ## Requirements
 
