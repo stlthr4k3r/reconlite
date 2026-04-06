@@ -1,10 +1,12 @@
 import argparse
+import ipaddress
 import json
 import re
 import socket
 import urllib.request
 
 IANA_HOST = "whois.iana.org"
+ARIN_HOST = "whois.arin.net"
 WHOIS_PORT = 43
 TIMEOUT = 10
 
@@ -117,9 +119,33 @@ def whois_lookup(domain):
         return response, None
 
 
+def is_ip(target):
+    try:
+        ipaddress.ip_address(target)
+        return True
+    except ValueError:
+        return False
+
+
+def ip_whois_lookup(ip):
+    try:
+        response = whois_query(ARIN_HOST, f"n {ip}")
+    except (socket.gaierror, socket.timeout, OSError):
+        return None, "ARIN WHOIS server unreachable"
+
+    refer = re.search(r"ReferralServer:\s*whois://(\S+)", response)
+    if refer:
+        try:
+            response = whois_query(refer.group(1), ip)
+        except (socket.gaierror, socket.timeout, OSError):
+            pass
+
+    return response, None
+
+
 def main():
     parser = argparse.ArgumentParser(description="ReconLite - Simple Recon Tool")
-    parser.add_argument("target", help="Target domain")
+    parser.add_argument("target", help="Target domain or IP address")
     parser.add_argument("--whois", action="store_true", help="Run WHOIS lookup")
     args = parser.parse_args()
 
@@ -128,7 +154,11 @@ def main():
         return
 
     print(f"\n[+] Running WHOIS for {args.target}...\n")
-    result, error = whois_lookup(args.target)
+
+    if is_ip(args.target):
+        result, error = ip_whois_lookup(args.target)
+    else:
+        result, error = whois_lookup(args.target)
 
     if error:
         print(f"[-] {error}")
