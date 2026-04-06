@@ -1,74 +1,141 @@
-import subprocess
-import re
 import argparse
+import json
+import re
+import socket
+import urllib.request
 
-def parse_whois(whois_output):
-    """
-    Extract Registrar, Creation Date, and Name Servers from WHOIS output.
-    Returns a dictionary with structured data.
-    """
-    # Match "Registrar:" or fallback "Registrar Name:"
-    registrar_match = re.search(r"Registrar:\s*(.+)", whois_output, re.IGNORECASE)
-    if not registrar_match:
-        registrar_match = re.search(r"Registrar Name:\s*(.+)", whois_output, re.IGNORECASE)
-    registrar = registrar_match.group(1).strip() if registrar_match else "Not found"
+IANA_HOST = "whois.iana.org"
+WHOIS_PORT = 43
+TIMEOUT = 10
 
-    # Match "Creation Date:" or fallback "Created On:"
-    creation_match = re.search(r"Creation Date:\s*(.+)", whois_output, re.IGNORECASE)
-    if not creation_match:
-        creation_match = re.search(r"Created On:\s*(.+)", whois_output, re.IGNORECASE)
-    creation_date = creation_match.group(1).strip() if creation_match else "Not found"
 
-    # Match all "Name Server:" entries
-    name_servers = re.findall(r"Name Server:\s*(.+)", whois_output, re.IGNORECASE)
-    name_servers = [ns.strip() for ns in name_servers] if name_servers else []
+def whois_query(server, query, timeout=TIMEOUT):
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(timeout)
+        s.connect((server, WHOIS_PORT))
+        s.sendall(f"{query}\r\n".encode())
+        chunks = []
+        while data := s.recv(4096):
+            chunks.append(data)
+    return b"".join(chunks).decode("utf-8", errors="replace")
 
-    return {
-        "registrar": registrar,
-        "creation_date": creation_date,
-        "name_servers": name_servers
-    }
 
-def print_whois(parsed):
-    """Nicely prints a parsed WHOIS dictionary"""
-    print("\n[+] WHOIS Summary:")
-    print(f"    Registrar: {parsed['registrar']}")
-    print(f"    Creation Date: {parsed['creation_date']}")
-    print("    Name Servers:")
-    if parsed["name_servers"]:
-        for ns in parsed["name_servers"]:
-            print(f"        - {ns}")
-    else:
-        print("        Not found")
+def find_whois_server(tld):
+    response = whois_query(IANA_HOST, tld)
+
+    match = re.search(r"whois:\s+(\S+)", response)
+    if match:
+        return match.group(1), "whois"
+
+    if re.search(r"remarks:\s+https?://", response):
+        return None, "rdap"
+
+    server = f"whois.nic.{tld}"
+    try:
+        socket.getaddrinfo(server, WHOIS_PORT)
+    except socket.gaierror:
+        return None, None
+    return server, "whois"
+
+
+def find_rdap_server(tld):
+    resp = urllib.request.urlopen(
+        "https://data.iana.org/rdap/dns.json", timeout=TIMEOUT
+    )
+    data = json.loads(resp.read())
+    for tlds, urls in data.get("services", []):
+        if tld in tlds:
+            return urls[0]
+    return None
+
+
+def rdap_lookup(domain):
+    tld = domain.rsplit(".", 1)[-1]
+    base_url = find_rdap_server(tld)
+    if not base_url:
+        return None
+
+    req = urllib.request.Request(
+        f"{base_url}domain/{domain}",
+        headers={"Accept": "application/rdap+json"},
+    )
+    resp = urllib.request.urlopen(req, timeout=TIMEOUT)
+    data = json.loads(resp.read())
+
+    registrar = None
+    for entity in data.get("entities", []):
+        if "registrar" not in entity.get("roles", []):
+            continue
+        for field in entity.get("vcardArray", [None, []])[1]:
+            if field[0] == "fn":
+                registrar = field[3]
+                break
+        break
+
+    events = {e["eventAction"]: e["eventDate"] for e in data.get("events", [])}
+    name_servers = [ns.get("ldhName", "") for ns in data.get("nameservers", [])]
+
+    lines = [f"Domain Name: {domain.upper()}"]
+    if registrar:
+        lines.append(f"Registrar: {registrar}")
+    if events.get("registration"):
+        lines.append(f"Creation Date: {events['registration']}")
+    if events.get("expiration"):
+        lines.append(f"Expiry Date: {events['expiration']}")
+    lines.extend(f"Status: {s}" for s in data.get("status", []))
+    lines.extend(f"Name Server: {ns}" for ns in name_servers)
+    lines.append(f"\nSource: RDAP ({base_url})")
+
+    return "\n".join(lines)
+
+
+def whois_lookup(domain):
+    tld = domain.rsplit(".", 1)[-1]
+    server, method = find_whois_server(tld)
+
+    if method == "rdap" or not server:
+        result = rdap_lookup(domain)
+        if result:
+            return result, None
+        return None, "No WHOIS/RDAP server found for this TLD"
+
+    try:
+        response = whois_query(server, domain)
+    except (socket.gaierror, socket.timeout, OSError):
+        result = rdap_lookup(domain)
+        if result:
+            return result, None
+        return None, f"WHOIS server {server} unreachable and RDAP failed"
+
+    referral = re.search(r"Whois Server:\s*(\S+)", response, re.IGNORECASE)
+    if not referral:
+        return response, None
+
+    try:
+        return whois_query(referral.group(1), domain), None
+    except (socket.gaierror, socket.timeout, OSError):
+        return response, None
+
 
 def main():
     parser = argparse.ArgumentParser(description="ReconLite - Simple Recon Tool")
-    parser.add_argument("target", help="Target domain or IP")
+    parser.add_argument("target", help="Target domain")
     parser.add_argument("--whois", action="store_true", help="Run WHOIS lookup")
-    arguments = parser.parse_args()
+    args = parser.parse_args()
 
-    target = arguments.target
+    if not args.whois:
+        parser.print_help()
+        return
 
-    if arguments.whois:
-        try:
-            print(f"\n[+] Running WHOIS for {target}...\n")
-            result = subprocess.run(
-                ["whois", target],
-                capture_output=True,
-                text=True
-            )
-            whois_output = result.stdout
+    print(f"\n[+] Running WHOIS for {args.target}...\n")
+    result, error = whois_lookup(args.target)
 
-            if not whois_output.strip():
-                print("[-] WHOIS returned empty output.")
-                return
+    if error:
+        print(f"[-] {error}")
+        return
 
-            # Parse and print WHOIS info
-            parsed = parse_whois(whois_output)
-            print_whois(parsed)
+    print(result)
 
-        except FileNotFoundError:
-            print("[-] WHOIS command not found. Please install 'whois'.")
 
 if __name__ == "__main__":
     main()
